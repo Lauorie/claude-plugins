@@ -92,3 +92,20 @@ def test_parse_bib_multi_field_one_line():
     assert cits[0].title == "Some Title Here"
     assert cits[0].year == 2018
     assert cits[0].venue == "IJCAI"
+
+
+def test_inline_bracket_markers_not_parsed_as_citations():
+    text = ("Some prose citing [1] and also [2] inline in the body.\n\n"
+            "## References\n"
+            "[1] Real Author. **A Real Title Here**. ICML, 2020.\n"
+            "[2] Other Author. **Another Title**. NeurIPS, 2021.\n")
+    cits = extract_citations(text, "md")
+    assert [c.index for c in cits] == [1, 2]          # only the 2 reference-list entries
+    assert all(len(c.raw_text) < 200 for c in cits)   # no giant garbage span
+
+
+def test_bold_title_extracted_as_query():
+    text = "[1] Lagerman, R., Huang, H. **Query Expansion by Prompting Large Language Models**. arXiv, 2023.\n"
+    c = extract_citations(text, "md")[0]
+    assert c.title == "Query Expansion by Prompting Large Language Models"
+    assert c.query == "Query Expansion by Prompting Large Language Models"
