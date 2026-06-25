@@ -7,11 +7,11 @@ Large models reliably hallucinate citation metadata — they keep a real paper t
 ## Install
 
 ```
-/plugin marketplace add atominfinite/claude-plugins
+/plugin marketplace add Lauorie/claude-plugins
 /plugin install citation-gate@atominfinite
 ```
 
-> Replace `atominfinite/claude-plugins` with the GitHub repo that hosts this marketplace.
+> Replace `Lauorie/claude-plugins` with the GitHub repo that hosts this marketplace.
 
 ## Requirements
 
