@@ -10,7 +10,9 @@ import logging
 from typing import List, Optional, Tuple
 
 from .models import Citation, CanonicalRecord, CitationResult, Verdict
-from .normalize import title_overlap, first_author_mismatch, venue_key
+from .normalize import (
+    title_overlap, first_author_mismatch, venue_key, author_conflict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +34,8 @@ def _mismatches(citation: Citation, canonical: CanonicalRecord) -> Tuple[str, ..
     fields = []
     cited_first = citation.authors[0] if citation.authors else ""
     canon_first = canonical.authors[0] if canonical.authors else ""
-    if first_author_mismatch(cited_first, canon_first):
+    if (first_author_mismatch(cited_first, canon_first)
+            or author_conflict(citation.author_pairs, canonical.authors)):
         fields.append("authors")
     if (citation.year and canonical.year
             and abs(citation.year - canonical.year) > YEAR_TOLERANCE):

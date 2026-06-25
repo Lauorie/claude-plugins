@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from typing import Optional, Set
+from typing import Optional, Set, Tuple
 
 _PUNCT = re.compile(r"[^a-z0-9]+")
 _WS = re.compile(r"\s+")
@@ -71,6 +71,118 @@ def first_author_mismatch(cited_first: str, canonical_first: str) -> bool:
     return a.isdisjoint(b)
 
 
+# "Surname, I." author tokens (surname may be multi-word: 'Al Nazi, Z.').
+_AUTHOR_PAIR = re.compile(
+    r"([A-Z][A-Za-zÀ-ɏ'\-]+(?:\s+[A-Z][A-Za-zÀ-ɏ'\-]+)*)"
+    r",\s*([A-Za-z])\."
+)
+
+
+def parse_author_pairs(segment: str) -> Tuple[Tuple[str, str], ...]:
+    """Extract ('Surname', 'I') tuples from a 'Lastname, F., Lastname2, G.' author
+    segment. First initial only; multi-word surnames preserved."""
+    return tuple((m.group(1).strip(), m.group(2).upper())
+                 for m in _AUTHOR_PAIR.finditer(segment))
+
+
+def _surname_key(name: str) -> str:
+    """Last alphabetic token of a name, lowercased, punctuation stripped."""
+    toks = [t for t in re.split(r"\s+", name.strip()) if t and not t.isdigit()]
+    return _PUNCT.sub("", toks[-1].lower()) if toks else ""
+
+
+def _given_initial(name: str) -> str:
+    """First initial of a 'Given Family' authoritative name ('' if unparseable)."""
+    toks = [t for t in re.split(r"\s+", name.strip()) if t and not t.isdigit()]
+    if not toks:
+        return ""
+    letters = re.sub(r"[^a-zA-Z]", "", toks[0])
+    return letters[0].upper() if letters else ""
+
+
+def author_conflict(cited_pairs: Tuple[Tuple[str, str], ...],
+                    authoritative: Tuple[str, ...]) -> bool:
+    """High-precision co-author fabrication signal.
+
+    Fires when a cited author's surname *matches* an authoritative author's
+    surname but the cited first initial *differs* from every authoritative
+    author sharing that surname (e.g. cited 'Wang, H.' but the real co-author is
+    'Jiahao Wang'). Truncated author lists never trigger it — a cited surname
+    absent from the record is ignored — so it only flags positive contradictions.
+    """
+    if not cited_pairs or not authoritative:
+        return False
+    fam: dict = {}
+    for nm in authoritative:
+        key = _surname_key(nm)
+        init = _given_initial(nm)
+        if key and init:
+            fam.setdefault(key, set()).add(init)
+    for surname, initial in cited_pairs:
+        key = _surname_key(surname)
+        if key and key in fam and fam[key] and initial.upper() not in fam[key]:
+            return True
+    return False
+
+
+def extra_authors(cited_pairs: Tuple[Tuple[str, str], ...],
+                  authoritative: Tuple[str, ...]) -> bool:
+    """True when a cited author's surname is absent from the authoritative author
+    list — i.e. a fabricated/inserted co-author. Truncation is fine (a real
+    author simply omitted never triggers it); use only when a DOI pins the exact
+    paper so the authoritative list is known-complete."""
+    if not cited_pairs or not authoritative:
+        return False
+    real = {k for k in (_surname_key(nm) for nm in authoritative) if k}
+    if not real:
+        return False
+    for surname, _ in cited_pairs:
+        key = _surname_key(surname)
+        if key and key not in real:
+            return True
+    return False
+
+
+_PARENS = re.compile(r"\([^)]*\)")
+_TITLE_STOP = {
+    "a", "an", "the", "of", "for", "and", "with", "on", "in", "to", "from",
+    "using", "via", "based", "by", "as", "at", "or",
+}
+
+
+def _title_core(s: str) -> str:
+    """Normalized title with parenthetical acronyms (e.g. '(ColBERT-PRF)') dropped."""
+    return normalize_title(_PARENS.sub(" ", s or ""))
+
+
+def title_mismatch(cited: str, authoritative: str) -> bool:
+    """True when the cited title contradicts the authoritative (DOI-pinned) title.
+
+    Tolerant of benign differences — case, hyphenation, a trailing '(ACRONYM)',
+    or dropping a post-colon subtitle. Fires only on a *substantive* divergence
+    (≥2 content-word symmetric difference), e.g. words dropped from / added to the
+    middle of the title. Use only when a DOI has pinned the exact paper.
+    """
+    if not cited or not authoritative:
+        return False
+    c = _title_core(cited)
+    a = _title_core(authoritative)
+    if not c or not a or c == a:
+        return False
+    # allow dropping a post-colon subtitle: cited == authoritative main title
+    a_main = _title_core(authoritative.split(":", 1)[0])
+    if c == a_main:
+        return False
+    cset, aset = set(c.split()), set(a.split())
+    extra = {t for t in (cset - aset) if t not in _TITLE_STOP and len(t) > 2}
+    missing = {t for t in (aset - cset) if t not in _TITLE_STOP and len(t) > 2}
+    # Any content word in the citation that is NOT in the authoritative title is
+    # a strong fabrication signal (inserted/changed word) → flag even one. A pure
+    # drop (cited is a subset) is tolerated up to one word (abbreviation), flagged
+    # only when ≥2 substantive words are missing.
+    return len(extra) >= 1 or len(missing) >= 2
+
+
 def venue_key(s: Optional[str]) -> Optional[str]:
     if not s:
         return None
@@ -105,5 +217,6 @@ def venue_conflicts(cited: Optional[str], authoritative: Optional[str]) -> bool:
 __all__ = [
     "normalize_title", "token_set", "title_overlap",
     "name_words", "first_author_mismatch", "venue_key", "venue_conflicts",
+    "parse_author_pairs", "author_conflict", "extra_authors", "title_mismatch",
     "VENUE_ALIASES",
 ]

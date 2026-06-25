@@ -19,6 +19,9 @@ POLITE_DELAY = 0.5
 _REGISTRY_TMP = []
 
 _DOI_RE = re.compile(r"^10\.\d{4,}/\S+$")
+_ARXIV_DOI_RE = re.compile(r"^10\.48550/arxiv\.(.+)$", re.IGNORECASE)
+_SS_PAPER_URL = "https://api.semanticscholar.org/graph/v1/paper/arXiv:{}"
+ARXIV_RESOLVE_RETRIES = 2
 
 
 class BackendError(Exception):
@@ -72,14 +75,86 @@ def _crossref_message_to_record(msg: dict) -> CanonicalRecord:
     )
 
 
-def resolve_doi(doi: str, session=None) -> Optional[CanonicalRecord]:
-    """Resolve a DOI directly against CrossRef's /works/<doi> endpoint.
+def _resolve_arxiv(arxiv_id: str, session=None) -> Optional[CanonicalRecord]:
+    """Resolve an arXiv id to a CanonicalRecord via Semantic Scholar's paper
+    endpoint (CrossRef does not index 10.48550/arxiv.* DOIs). Retries a few times
+    on transient HTTP failure (e.g. 429) with light backoff; returns None on
+    persistent failure (fail open)."""
+    url = _SS_PAPER_URL.format(arxiv_id.strip())
+    for attempt in range(ARXIV_RESOLVE_RETRIES):
+        try:
+            p = http.get_json(url, {"fields": "title,authors,year,venue,externalIds"},
+                              timeout=TIMEOUT)
+            authors = tuple(a.get("name", "") for a in (p.get("authors") or []))
+            ext = p.get("externalIds") or {}
+            title = (p.get("title") or "").rstrip(".")
+            if not title:
+                return None
+            return CanonicalRecord(
+                title=title, authors=authors, year=_to_int(p.get("year")),
+                venue=p.get("venue"), pages=None,
+                doi=ext.get("DOI") or f"10.48550/arXiv.{arxiv_id}", source="arxiv-ss",
+            )
+        except (http.HttpError, ValueError, KeyError, TypeError) as e:
+            logger.warning("_resolve_arxiv failed for %s: %s", arxiv_id, e)
+            time.sleep(POLITE_DELAY * (attempt + 1))
+    return None
 
-    Returns a CanonicalRecord on HTTP 200; returns None on 404 or any
-    network/parse error (never raises out — fail open). `session` is accepted
-    for call-site compatibility but ignored (the stdlib http client is stateless).
+
+def resolve_arxiv_batch(arxiv_ids, session=None) -> dict:
+    """Resolve many arXiv ids in ONE Semantic Scholar /paper/batch call → {id: rec}.
+
+    Rate-limit-friendly for large bibliographies (one request instead of N).
+    Returns the records it could resolve; missing/failed ids are simply absent
+    (fail open). Retries the whole batch on transient HTTP error with backoff."""
+    ids = [i for i in dict.fromkeys(arxiv_ids) if i]
+    if not ids:
+        return {}
+    out: dict = {}
+    for attempt in range(ARXIV_RESOLVE_RETRIES + 1):
+        try:
+            data = http.post_json(
+                "https://api.semanticscholar.org/graph/v1/paper/batch",
+                {"fields": "title,authors,year,venue,externalIds"},
+                {"ids": [f"ARXIV:{i}" for i in ids]}, timeout=TIMEOUT * 3) or []
+            for i, p in zip(ids, data):
+                if not p:
+                    continue
+                title = (p.get("title") or "").rstrip(".")
+                if not title:
+                    continue
+                authors = tuple(a.get("name", "") for a in (p.get("authors") or []))
+                ext = p.get("externalIds") or {}
+                out[i] = CanonicalRecord(
+                    title=title, authors=authors, year=_to_int(p.get("year")),
+                    venue=p.get("venue"), pages=None,
+                    doi=ext.get("DOI") or f"10.48550/arXiv.{i}", source="arxiv-ss")
+            return out
+        except http.HttpError as e:
+            logger.warning("resolve_arxiv_batch network error: %s", e)
+            time.sleep(POLITE_DELAY * (attempt + 1))
+        except (ValueError, KeyError, TypeError) as e:
+            logger.warning("resolve_arxiv_batch parse error: %s", e)
+            return out
+    return out
+
+
+def resolve_doi(doi: str, session=None) -> Optional[CanonicalRecord]:
+    """Resolve a DOI to a CanonicalRecord.
+
+    arXiv DOIs (10.48550/arxiv.*) go to Semantic Scholar; everything else goes to
+    CrossRef's /works/<doi> endpoint. Returns None on 404 or any network/parse
+    error (never raises out — fail open). `session` is accepted for call-site
+    compatibility but ignored (the stdlib http client is stateless).
     """
-    quoted = urllib.parse.quote(normalize_doi(doi), safe="")
+    norm = normalize_doi(doi)
+    m = _ARXIV_DOI_RE.match(norm)
+    if m:
+        rec = _resolve_arxiv(m.group(1), session)
+        if rec is not None:
+            return rec
+        # fall through to CrossRef (usually 404) so behaviour is unchanged
+    quoted = urllib.parse.quote(norm, safe="")
     url = f"https://api.crossref.org/works/{quoted}"
     try:
         payload = http.get_json(url, {"mailto": MAILTO}, timeout=TIMEOUT)

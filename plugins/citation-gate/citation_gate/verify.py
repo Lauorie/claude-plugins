@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import List, Optional
 
@@ -10,8 +11,10 @@ from .match import best_match, grade, _mismatches
 from .models import Citation, CanonicalRecord, CitationResult, Verdict
 from .parse import extract_citations
 from .report import Report
-from .backends import search_all, normalize_doi, valid_doi, resolve_doi
-from .normalize import title_overlap, venue_conflicts
+from .backends import (
+    search_all, normalize_doi, valid_doi, resolve_doi, resolve_arxiv_batch,
+)
+from .normalize import title_overlap, venue_conflicts, title_mismatch, extra_authors
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +22,8 @@ _FILETYPE = {".bib": "bib", ".tex": "tex", ".md": "md"}
 MAX_CITATIONS_PER_RUN = 30
 DOI_TITLE_OVERLAP = 0.5
 _ARXIV_DOI_PREFIX = "10.48550"
+# arXiv DOIs are always registrant 10.48550; any other 10.NNNNN/arxiv.* is malformed.
+_ARXIV_PREFIX_RE = re.compile(r"^(10\.\d{4,})/arxiv\.", re.IGNORECASE)
 
 
 def _doi_correct_str(rec: CanonicalRecord) -> str:
@@ -30,8 +35,22 @@ def _doi_correct_str(rec: CanonicalRecord) -> str:
     )
 
 
+def _resolve_doi_cached(doi: str, session, cache: Cache) -> Optional[CanonicalRecord]:
+    """resolve_doi with a persistent cache of *successful* resolutions only.
+    Failures (network/429) are not cached so a later run can retry — this also
+    keeps large bibliographies from re-paying arXiv-resolution latency each run."""
+    key = "doi-resolve::" + normalize_doi(doi)
+    hit = cache.get(key)
+    if hit is not None:
+        return hit[0] if hit else None
+    rec = resolve_doi(doi, session)
+    if rec is not None:
+        cache.put(key, [rec])
+    return rec
+
+
 def _check_doi(citation: Citation, title_canonical: Optional[CanonicalRecord],
-               session) -> Optional[CitationResult]:
+               session, cache: Cache) -> Optional[CitationResult]:
     """DOI-aware grading. Returns a HARD_FAIL CitationResult when a DOI rule fires,
     else None (caller falls through to the title-search grade). Fail open: any
     network failure inside resolve_doi yields None and never raises."""
@@ -45,7 +64,14 @@ def _check_doi(citation: Citation, title_canonical: Optional[CanonicalRecord],
             citation, Verdict.HARD_FAIL, None, ("doi",),
             f"DOI 格式非法（必须以 10. 开头）：{doi}")
 
-    doi_rec = resolve_doi(doi, session)
+    # Rule 1b: an arXiv DOI must be registrant 10.48550 (offline, no network).
+    m_ax = _ARXIV_PREFIX_RE.match(normalize_doi(doi))
+    if m_ax and m_ax.group(1) != _ARXIV_DOI_PREFIX:
+        return CitationResult(
+            citation, Verdict.HARD_FAIL, None, ("doi",),
+            f"arXiv DOI 前缀应为 10.48550，实际为 {m_ax.group(1)}：{doi}")
+
+    doi_rec = _resolve_doi_cached(doi, session, cache)
     if doi_rec is not None:
         # Rule 2a: the DOI points at a different paper.
         if title_overlap(doi_rec.title, citation.query) < DOI_TITLE_OVERLAP:
@@ -58,13 +84,27 @@ def _check_doi(citation: Citation, title_canonical: Optional[CanonicalRecord],
         fields = list(_mismatches(citation, doi_rec))
         if "venue" not in fields and venue_conflicts(citation.venue, doi_rec.venue):
             fields.append("venue")
+        # DOI pins the exact paper → the authoritative author list is complete, so
+        # a cited author absent from it is a fabricated/inserted co-author.
+        if "authors" not in fields and extra_authors(
+                citation.author_pairs, doi_rec.authors):
+            fields.append("authors")
+        # DOI pins the exact paper → the cited title must match the authoritative
+        # one (tolerant of acronym suffix / subtitle drop). Catches a real title
+        # kept under a correct DOI but with words altered/removed.
+        if ("title" not in fields and citation.title
+                and title_mismatch(citation.title, doi_rec.title)):
+            fields.append("title")
         fields = tuple(fields)
         if fields:
             return CitationResult(
                 citation, Verdict.HARD_FAIL, doi_rec, fields,
                 f"与 DOI 对应的权威记录字段不符（{', '.join(fields)}）。"
                 f"正确：{_doi_correct_str(doi_rec)}")
-        return None
+        # DOI is an exact identifier and every checked field agrees → authoritative
+        # PASS; no need to fall through to the noisier title search.
+        return CitationResult(citation, Verdict.PASS, doi_rec, (),
+                              "通过（DOI 权威记录一致）")
 
     # doi_rec is None: cited DOI did not resolve via CrossRef.
     norm = normalize_doi(doi)
@@ -76,6 +116,37 @@ def _check_doi(citation: Citation, title_canonical: Optional[CanonicalRecord],
             f"DOI 与权威记录不符：所引 {doi}，实际应为 {title_canonical.doi}")
     # Otherwise never HARD_FAIL merely because CrossRef lacked the DOI.
     return None
+
+
+def _prefetch_arxiv(citations: List[Citation], session, cache: Cache) -> None:
+    """One batched Semantic Scholar call resolves every correct-prefix arXiv DOI
+    up front and seeds the resolve cache — so a 23-entry bibliography needs one
+    request, not N, and survives per-endpoint rate limiting."""
+    pending: dict = {}  # arxiv_id -> [doi-cache-key, ...]
+    for c in citations:
+        if not c.doi:
+            continue
+        nd = normalize_doi(c.doi)
+        m = _ARXIV_PREFIX_RE.match(nd)
+        if not (m and m.group(1) == _ARXIV_DOI_PREFIX):
+            continue
+        key = "doi-resolve::" + nd
+        if cache.get(key) is not None:
+            continue
+        aid = nd.split("/arxiv.", 1)[1]
+        pending.setdefault(aid, []).append(key)
+    if not pending:
+        return
+    try:
+        recs = resolve_arxiv_batch(list(pending), session)
+    except Exception as e:  # fail open: prefetch is an optimisation, never fatal
+        logger.warning("arxiv prefetch failed: %s", e)
+        return
+    for aid, keys in pending.items():
+        rec = recs.get(aid)
+        if rec is not None:
+            for k in keys:
+                cache.put(k, [rec])
 
 
 def _verify_one(citation: Citation, session, cache: Cache) -> CitationResult:
@@ -90,7 +161,7 @@ def _verify_one(citation: Citation, session, cache: Cache) -> CitationResult:
 
     if citation.doi:
         try:
-            doi_result = _check_doi(citation, title_canonical, session)
+            doi_result = _check_doi(citation, title_canonical, session, cache)
         except Exception as e:  # fail open: DOI checks never break verification
             logger.warning("DOI check raised for [%s]: %s", citation.index, e)
             doi_result = None
@@ -124,6 +195,8 @@ def verify_files(paths: List[str], session=None,
             total, MAX_CITATIONS_PER_RUN, MAX_CITATIONS_PER_RUN, total - MAX_CITATIONS_PER_RUN,
         )
         all_citations = all_citations[:MAX_CITATIONS_PER_RUN]
+
+    _prefetch_arxiv(all_citations, session, cache)
 
     results: List[CitationResult] = []
     consecutive_skips = 0

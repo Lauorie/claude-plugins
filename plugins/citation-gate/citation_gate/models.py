@@ -19,6 +19,7 @@ class Citation:
     index: int
     title: Optional[str] = None
     authors: Tuple[str, ...] = ()
+    author_pairs: Tuple[Tuple[str, str], ...] = ()
     year: Optional[int] = None
     venue: Optional[str] = None
     pages: Optional[str] = None

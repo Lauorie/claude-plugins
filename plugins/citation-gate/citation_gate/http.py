@@ -6,7 +6,7 @@ import logging
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Dict
+from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -31,4 +31,23 @@ def get_json(url: str, params: Dict[str, object], timeout: int = DEFAULT_TIMEOUT
         raise HttpError(str(e)) from e
 
 
-__all__ = ["get_json", "HttpError", "DEFAULT_TIMEOUT"]
+def post_json(url: str, params: Dict[str, object], body: Any,
+              timeout: int = DEFAULT_TIMEOUT) -> Any:
+    """POST a JSON body and parse the JSON response. Raises HttpError on any
+    network/parse failure (including non-2xx), mirroring get_json."""
+    qs = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
+    full = f"{url}?{qs}" if qs else url
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        full, data=data, method="POST",
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json",
+                 "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+        return json.loads(raw)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise HttpError(str(e)) from e
+
+
+__all__ = ["get_json", "post_json", "HttpError", "DEFAULT_TIMEOUT"]

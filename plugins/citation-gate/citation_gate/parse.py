@@ -11,7 +11,7 @@ import re
 from typing import Dict, List, Optional
 
 from .models import Citation
-from .normalize import venue_key
+from .normalize import venue_key, parse_author_pairs
 
 logger = logging.getLogger(__name__)
 
@@ -19,10 +19,24 @@ _WS = re.compile(r"\s+")
 _YEAR = re.compile(r"\b(19[5-9]\d|20[0-3]\d)\b")
 # Capture DOI-shaped tokens for ANY registrant prefix (incl. malformed ones like
 # 20.48550/...) so the gate can flag invalid prefixes rather than silently drop them.
-_DOI = re.compile(r"\b\d{2}\.\d{4,}/[^\s,}\]]+")
-# 编号条目：[40] ... 直到下一个 [n] 或文末（行首锚定，避免匹配行内 [N] 标注）
-_NUMBERED = re.compile(r"^[ \t]*\[(\d+)\]\s+(.+?)(?=\n[ \t]*\[\d+\]|\Z)", re.DOTALL | re.MULTILINE)
-_BOLD = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+_DOI = re.compile(r"\b\d{2}\.\d{4,}/[^\s,}\])]+")
+# An arXiv abs URL identifies the paper as precisely as a DOI; when no explicit
+# DOI is present we derive the canonical arXiv DOI from it so the DOI machinery
+# can resolve + cross-check it (catches a URL that points at the wrong paper).
+_ARXIV_URL = re.compile(r"arxiv\.org/abs/(\d{4}\.\d{4,5})", re.IGNORECASE)
+# 编号条目：行首 [40] 或 40. ……直到下一个同形编号行或文末（行首锚定，避免匹配行内 [N]）。
+# group(1)=方括号编号 [N]，group(2)=点编号 N.，group(3)=条目正文。
+_NUMBERED = re.compile(
+    r"^[ \t]*(?:\[(\d+)\]|(\d+)\.)[ \t]+(.+?)"
+    r"(?=\n[ \t]*(?:\[\d+\]|\d+\.)[ \t]|\Z)",
+    re.DOTALL | re.MULTILINE,
+)
+# Emphasised title span — **bold** or *italic* (markdown). Content has no '*'.
+_BOLD = re.compile(r"\*{1,2}([^*]+?)\*{1,2}", re.DOTALL)
+# 'Authors (YYYY). Title …' author–year–title prose shape (APA-ish). The first
+# parenthesised 4-digit year followed by a period separates the author list from
+# the title; in this style a trailing *italic* span is the VENUE, not the title.
+_YEAR_PAREN = re.compile(r"\(\s*(\d{4}[a-z]?)\s*\)\s*\.")
 _BIBITEM = re.compile(r"\\bibitem(?:\[[^\]]*\])?\{[^}]*\}\s*(.+?)(?=\\bibitem|\Z)", re.DOTALL)
 
 
@@ -37,7 +51,12 @@ def _year_of(s: str) -> Optional[int]:
 
 def _doi_of(s: str) -> Optional[str]:
     m = _DOI.search(s)
-    return m.group(0).rstrip(".") if m else None
+    if m:
+        return m.group(0).rstrip(".);")
+    u = _ARXIV_URL.search(s)
+    if u:
+        return f"10.48550/arxiv.{u.group(1)}"
+    return None
 
 
 def _first_author(entry: str) -> str:
@@ -46,17 +65,54 @@ def _first_author(entry: str) -> str:
     return _clean(head)
 
 
+def _author_segment(body: str, title: Optional[str]) -> str:
+    """The author list lives before the emphasised (*italic* / **bold**) title."""
+    if "*" in body:
+        return body.split("*", 1)[0]
+    if title and title in body:
+        return body.split(title, 1)[0]
+    return body
+
+
+def _split_authoryear_title(body: str) -> tuple[Optional[str], Optional[str]]:
+    """For 'Authors (YYYY). Title. *Venue*.' prose, return (author_segment, title).
+
+    Returns (None, None) when the body is not in that author–(year)–title shape, so
+    the caller falls back to the '*italic* = title' rule. In this APA-ish style the
+    italic span is the venue (e.g. *Springer*), so it is stripped from the title —
+    otherwise the title (and thus the search query) would become the publisher name.
+    """
+    m = _YEAR_PAREN.search(body)
+    if not m:
+        return None, None
+    author_seg = body[:m.start()]
+    rest = body[m.end():].strip()
+    title = _clean(_BOLD.sub(" ", rest))  # drop the trailing *venue* italic
+    return author_seg, (title or None)
+
+
 def _parse_prose(text: str) -> List[Citation]:
     out: List[Citation] = []
     matches = list(_NUMBERED.finditer(text))
     if matches:
         for m in matches:
-            idx, body = int(m.group(1)), _clean(m.group(2))
-            m_bold = _BOLD.search(body)
-            title = _clean(re.sub(r"\*\*", "", m_bold.group(1))) if m_bold else None
+            is_dot = m.group(2) is not None
+            idx, body = int(m.group(1) or m.group(2)), _clean(m.group(3))
+            # A bare 'N.' ordered-list item with no year is an instruction list,
+            # not a citation — don't manufacture phantom references from it.
+            if is_dot and _year_of(body) is None:
+                continue
+            author_seg, title_ay = _split_authoryear_title(body)
+            if author_seg is not None:  # 'Authors (YYYY). Title. *Venue*.'
+                title, seg = title_ay, author_seg
+            else:                       # '... *Title*. Venue, YYYY. …'
+                m_bold = _BOLD.search(body)
+                title = _clean(re.sub(r"\*\*", "", m_bold.group(1))) if m_bold else None
+                seg = _author_segment(body, title)
             out.append(Citation(
                 raw_text=body, index=idx, title=title,
                 authors=(_first_author(body),),
+                author_pairs=parse_author_pairs(seg),
                 year=_year_of(body), venue=venue_key(body), pages=None,
                 doi=_doi_of(body),
             ))
@@ -66,6 +122,7 @@ def _parse_prose(text: str) -> List[Citation]:
         out.append(Citation(
             raw_text=body, index=i, title=None,
             authors=(_first_author(body),),
+            author_pairs=parse_author_pairs(_author_segment(body, None)),
             year=_year_of(body), venue=venue_key(body), pages=None,
             doi=_doi_of(body),
         ))
@@ -195,11 +252,23 @@ def _parse_bib(text: str) -> List[Citation]:
         venue_raw = fields.get("booktitle") or fields.get("journal")
         authors_raw = fields.get("author", "")
         authors = tuple(a.strip() for a in authors_raw.split(" and ") if a.strip())
+        pairs = []
+        for a in authors:
+            if "," in a:  # "Lastname, Firstname"
+                last, _, first = a.partition(",")
+            else:  # "Firstname Lastname"
+                parts = a.rsplit(" ", 1)
+                first, last = (parts[0], parts[1]) if len(parts) == 2 else ("", a)
+            last, first = last.strip(), first.strip()
+            init = re.sub(r"[^A-Za-z]", "", first)[:1].upper()
+            if last and init:
+                pairs.append((last, init))
         year_str = fields.get("year", "")
         year = int(year_str) if year_str.isdigit() else None
         out.append(Citation(
             raw_text=fields.get("title", ""), index=i,
             title=fields.get("title") or None, authors=authors,
+            author_pairs=tuple(pairs),
             year=year, venue=venue_key(venue_raw) or venue_raw,
             pages=fields.get("pages"), doi=fields.get("doi"),
         ))
