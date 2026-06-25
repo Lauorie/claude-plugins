@@ -31,6 +31,15 @@ Design choices that keep it usable:
 - **Confidence-gated**: a HARD_FAIL requires a title-overlap ≥ 0.85 with the authoritative record, so it distinguishes real fabrication from "matched a different paper" and won't block correct citations.
 - **Fails open**: any verifier error / offline / timeout → passes. At most **3** block rounds per session, then it passes with a manual-review note. It can never deadlock you.
 
+## Recommended companion policy
+
+The hook is the **enforcement** (it blocks fabricated metadata at delivery). Pair
+it with the matching **behavioral policy** so the model gets citations right
+*before* the gate runs and rarely trips it. Copy the `## Citation Integrity`
+section from [`CLAUDE.md`](./CLAUDE.md) into your own user- or project-level
+`CLAUDE.md`. (A plugin cannot inject a `CLAUDE.md` into your sessions — `CLAUDE.md`
+is loaded only from your user/project directories — so this step is manual.)
+
 ## Use it from the Claude Agent SDK (Python)
 
 The marketplace install above wires a Stop hook into Claude Code's settings for
