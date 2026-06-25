@@ -31,6 +31,45 @@ Design choices that keep it usable:
 - **Confidence-gated**: a HARD_FAIL requires a title-overlap ≥ 0.85 with the authoritative record, so it distinguishes real fabrication from "matched a different paper" and won't block correct citations.
 - **Fails open**: any verifier error / offline / timeout → passes. At most **3** block rounds per session, then it passes with a manual-review note. It can never deadlock you.
 
+## Use it from the Claude Agent SDK (Python)
+
+The marketplace install above wires a Stop hook into Claude Code's settings for
+the **interactive CLI**. If your users run agents through
+**[anthropics/claude-agent-sdk-python](https://github.com/anthropics/claude-agent-sdk-python)**,
+register the gate **in code** instead — the bundled `citation_gate.sdk_hook`
+provides a ready-made Stop callback (verified against `claude-agent-sdk==0.2.110`):
+
+```python
+import sys
+sys.path.insert(0, "/path/to/citation-gate")  # dir that contains citation_gate/
+from claude_agent_sdk import ClaudeAgentOptions, HookMatcher, query
+from citation_gate.sdk_hook import make_stop_hook
+
+options = ClaudeAgentOptions(
+    hooks={"Stop": [HookMatcher(hooks=[make_stop_hook(files=["paper.md"])])]},
+    # If your app sets setting_sources=[] (common for isolation), the CLI's
+    # settings.json hook is NOT loaded — registering here is what guarantees
+    # the gate runs under the SDK.
+)
+
+async for msg in query(prompt="…write the related-work section…", options=options):
+    ...
+```
+
+- `files` is a list of citation files, **or** a callable `lambda input_data: [...]`
+  that computes the paths at stop time (e.g. from `input_data["cwd"]`).
+- On a fabricated citation the callback returns the SDK's documented block
+  contract `{"decision": "block", "reason": ...}` so the agent reworks it; a clean
+  run returns `{}`. It **fails open** — any verifier/network error returns `{}`
+  and never breaks the agent loop. The blocking network lookup runs in a worker
+  thread (`asyncio.to_thread`), so it won't stall the event loop.
+- Zero extra dependencies — only `python3` stdlib (plus the SDK itself).
+
+> Why register in code: per the current SDK docs, omitting `setting_sources`
+> loads `~/.claude/settings.json` (so the CLI hook would also fire), but a
+> production SDK app that passes `setting_sources=[]` for hermetic behavior
+> would silently skip it. Programmatic registration is bypass-proof.
+
 ## Overrides
 
 - **Skip one file**: put `<!-- citation-gate: skip -->` at the top of it.
