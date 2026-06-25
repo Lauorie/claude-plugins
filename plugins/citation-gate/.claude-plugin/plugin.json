@@ -1,0 +1,9 @@
+{
+  "name": "citation-gate",
+  "version": "1.0.0",
+  "description": "Catch fabricated bibliographic citations before delivery. A Stop hook verifies every citation's authors/venue/year against DBLP / Semantic Scholar / CrossRef / OpenAlex and blocks delivery (forces rework) on fabricated metadata. Fails open, never deadlocks. Needs only python3 (no third-party Python deps).",
+  "author": {
+    "name": "AtomInfinite",
+    "email": "support@atominfinite.ai"
+  }
+}

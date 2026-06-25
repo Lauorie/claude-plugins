@@ -1,0 +1,16 @@
+{
+  "description": "Citation verification gate: on Stop, verify citations in session-changed .tex/.bib/.md and block delivery on fabricated bibliographic metadata.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/citation-gate.js\"",
+            "timeout": 130
+          }
+        ]
+      }
+    ]
+  }
+}

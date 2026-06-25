@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "atominfinite",
+  "description": "AtomInfinite Claude Code plugins",
+  "owner": {
+    "name": "AtomInfinite",
+    "email": "support@atominfinite.ai"
+  },
+  "plugins": [
+    {
+      "name": "citation-gate",
+      "description": "Catch fabricated bibliographic citations before delivery. A Stop hook verifies every citation's authors/venue/year against DBLP/Semantic Scholar/CrossRef/OpenAlex and blocks delivery on fabricated metadata. Zero Python dependencies.",
+      "author": { "name": "AtomInfinite" },
+      "category": "productivity",
+      "source": "./plugins/citation-gate"
+    }
+  ]
+}
