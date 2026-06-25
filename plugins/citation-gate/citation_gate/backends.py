@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
+import urllib.parse
 from typing import List, Optional, Tuple
 
 from . import http
@@ -15,6 +17,8 @@ MAILTO = os.environ.get("CITATION_GATE_MAILTO", "citation-gate@users.noreply.git
 TIMEOUT = 6
 POLITE_DELAY = 0.5
 _REGISTRY_TMP = []
+
+_DOI_RE = re.compile(r"^10\.\d{4,}/\S+$")
 
 
 class BackendError(Exception):
@@ -30,6 +34,61 @@ def _to_int(v: object) -> Optional[int]:
     try:
         return int(str(v)[:4])
     except (TypeError, ValueError):
+        return None
+
+
+def normalize_doi(s: str) -> str:
+    """Lowercase, strip leading https://doi.org/ or doi: prefix and whitespace."""
+    out = (s or "").strip().lower()
+    for prefix in ("https://doi.org/", "http://doi.org/", "doi.org/", "doi:"):
+        if out.startswith(prefix):
+            out = out[len(prefix):]
+            break
+    return out.strip()
+
+
+def valid_doi(doi: str) -> bool:
+    """True iff doi matches the registrant-prefix DOI grammar (10.NNNN/suffix)."""
+    return bool(_DOI_RE.match(normalize_doi(doi)))
+
+
+def _crossref_message_to_record(msg: dict) -> CanonicalRecord:
+    """Map a single CrossRef `message` object to a CanonicalRecord.
+
+    Same field mapping as CrossrefBackend, but `message` is one object (not a list).
+    """
+    authors = tuple(
+        f"{a.get('given', '')} {a.get('family', '')}".strip()
+        for a in (msg.get("author") or [])
+    )
+    year = None
+    dp = (msg.get("issued") or {}).get("date-parts", [[None]])
+    if dp and dp[0] and dp[0][0]:
+        year = _to_int(dp[0][0])
+    return CanonicalRecord(
+        title=(msg.get("title") or [""])[0].rstrip("."), authors=authors,
+        year=year, venue=(msg.get("container-title") or [None])[0],
+        pages=msg.get("page"), doi=msg.get("DOI"), source="crossref-doi",
+    )
+
+
+def resolve_doi(doi: str, session=None) -> Optional[CanonicalRecord]:
+    """Resolve a DOI directly against CrossRef's /works/<doi> endpoint.
+
+    Returns a CanonicalRecord on HTTP 200; returns None on 404 or any
+    network/parse error (never raises out — fail open). `session` is accepted
+    for call-site compatibility but ignored (the stdlib http client is stateless).
+    """
+    quoted = urllib.parse.quote(normalize_doi(doi), safe="")
+    url = f"https://api.crossref.org/works/{quoted}"
+    try:
+        payload = http.get_json(url, {"mailto": MAILTO}, timeout=TIMEOUT)
+        msg = payload.get("message")
+        if not isinstance(msg, dict):
+            return None
+        return _crossref_message_to_record(msg)
+    except (http.HttpError, ValueError, KeyError, TypeError) as e:
+        logger.warning("resolve_doi failed for %s: %s", doi, e)
         return None
 
 
@@ -177,4 +236,5 @@ def search_all(query: str, session=None,
 
 
 __all__ = ["BACKEND_REGISTRY", "register_backend", "search_all", "BackendError",
-           "DblpBackend", "SemanticScholarBackend", "CrossrefBackend", "OpenAlexBackend"]
+           "DblpBackend", "SemanticScholarBackend", "CrossrefBackend", "OpenAlexBackend",
+           "normalize_doi", "valid_doi", "resolve_doi"]

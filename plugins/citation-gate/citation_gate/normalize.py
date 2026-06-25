@@ -24,6 +24,8 @@ VENUE_ALIASES = {
     "emnlp": "EMNLP",
     "annual meeting of the association for computational linguistics": "ACL",
     "north american chapter of the association for computational linguistics": "NAACL",
+    # NAACL 2025 renamed its proceedings to "Nations of the Americas Chapter…".
+    "nations of the americas chapter of the association for computational linguistics": "NAACL",
     "naacl": "NAACL",
     "acl": "ACL",
     "computer vision and pattern recognition": "CVPR",
@@ -79,7 +81,29 @@ def venue_key(s: Optional[str]) -> Optional[str]:
     return None
 
 
+def venue_conflicts(cited: Optional[str], authoritative: Optional[str]) -> bool:
+    """Strict, asymmetric venue conflict for exact-identifier (DOI) checks.
+
+    Fires when the *cited* venue maps to a recognized conference/journal key
+    (e.g. AAAI, ACL) but the *authoritative* venue neither maps to that same key
+    nor literally contains that key as a token. This catches DOI↔venue lies such
+    as 'cited AAAI but the DOI is actually an IEEE Access / IET paper', which the
+    lossy alias-only comparison (which needs BOTH sides recognized) misses.
+    """
+    ck = venue_key(cited)
+    if not ck:
+        return False
+    ak = venue_key(authoritative)
+    if ak == ck:
+        return False
+    auth_tokens = token_set(authoritative or "")
+    if ck.lower() in auth_tokens:
+        return False
+    return True
+
+
 __all__ = [
     "normalize_title", "token_set", "title_overlap",
-    "name_words", "first_author_mismatch", "venue_key", "VENUE_ALIASES",
+    "name_words", "first_author_mismatch", "venue_key", "venue_conflicts",
+    "VENUE_ALIASES",
 ]

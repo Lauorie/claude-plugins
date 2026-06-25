@@ -1,6 +1,6 @@
 from citation_gate.normalize import (
     normalize_title, token_set, title_overlap,
-    name_words, first_author_mismatch, venue_key,
+    name_words, first_author_mismatch, venue_key, venue_conflicts,
 )
 
 
@@ -35,3 +35,15 @@ def test_venue_key_maps_aliases():
     assert venue_key("In: Proc of the 34th AAAI Conference") == "AAAI"
     assert venue_key("Proceedings of IJCAI") == "IJCAI"
     assert venue_key("some random workshop") is None
+
+
+def test_venue_conflicts_strict_asymmetric():
+    assert venue_conflicts("AAAI", "IEEE Access") is True
+    assert venue_conflicts("ACL", "IET Conference Proceedings") is True
+    assert venue_conflicts("AAAI", "Proc of the AAAI Conference") is False
+    assert venue_conflicts("Electronics", "IEEE Access") is False
+    assert venue_conflicts(None, "IEEE Access") is False
+    naacl2025 = ("Proceedings of the 2025 Conference of the Nations of the Americas "
+                 "Chapter of the Association for Computational Linguistics")
+    assert venue_key(naacl2025) == "NAACL"
+    assert venue_conflicts("NAACL", naacl2025) is False

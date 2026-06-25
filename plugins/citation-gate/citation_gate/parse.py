@@ -17,7 +17,9 @@ logger = logging.getLogger(__name__)
 
 _WS = re.compile(r"\s+")
 _YEAR = re.compile(r"\b(19[5-9]\d|20[0-3]\d)\b")
-_DOI = re.compile(r"10\.\d{4,}/[^\s,}\]]+")
+# Capture DOI-shaped tokens for ANY registrant prefix (incl. malformed ones like
+# 20.48550/...) so the gate can flag invalid prefixes rather than silently drop them.
+_DOI = re.compile(r"\b\d{2}\.\d{4,}/[^\s,}\]]+")
 # 编号条目：[40] ... 直到下一个 [n] 或文末（行首锚定，避免匹配行内 [N] 标注）
 _NUMBERED = re.compile(r"^[ \t]*\[(\d+)\]\s+(.+?)(?=\n[ \t]*\[\d+\]|\Z)", re.DOTALL | re.MULTILINE)
 _BOLD = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
