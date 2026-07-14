@@ -1,11 +1,16 @@
 """Text normalization, similarity, author/venue matching primitives."""
 from __future__ import annotations
 
+import html
 import re
 from typing import Optional, Set, Tuple
 
 _PUNCT = re.compile(r"[^a-z0-9]+")
 _WS = re.compile(r"\s+")
+# CrossRef titles carry inline markup (Si<sub>3</sub>N<sub>4</sub>, <i>…</i>)
+# and XML entities (&apos;) — strip/unescape them before comparing, or every
+# chemical-formula title "mismatches" its own authoritative record.
+_TAG = re.compile(r"<[^>]+>")
 
 # venue 归一表：normalized-substring -> canonical key（长模式优先匹配）
 VENUE_ALIASES = {
@@ -35,6 +40,7 @@ VENUE_ALIASES = {
 
 
 def normalize_title(s: str) -> str:
+    s = _TAG.sub("", html.unescape(s))
     s = _PUNCT.sub(" ", s.lower())
     return _WS.sub(" ", s).strip()
 
@@ -76,13 +82,33 @@ _AUTHOR_PAIR = re.compile(
     r"([A-Z][A-Za-zÀ-ɏ'\-]+(?:\s+[A-Z][A-Za-zÀ-ɏ'\-]+)*)"
     r",\s*([A-Za-z])\."
 )
+# "I. Surname" tokens ('C. Zarfl', 'A.J. Steckl', 'M. A. Fraga', dotless 'K Wasa').
+# Anchored to segment start / list separators so a dotless single capital can
+# only be an initial, never a word from leaked title text.
+_AUTHOR_PAIR_IF = re.compile(
+    r"(?:^|[,;&]|\band\b)\s*"
+    r"([A-Z](?:[.\s-]+[A-Z])*\.?)\s+"
+    r"([A-Z][A-Za-zÀ-ɏ'\-]+(?:\s+[A-Z][A-Za-zÀ-ɏ'\-]+)*)"
+)
 
 
 def parse_author_pairs(segment: str) -> Tuple[Tuple[str, str], ...]:
-    """Extract ('Surname', 'I') tuples from a 'Lastname, F., Lastname2, G.' author
-    segment. First initial only; multi-word surnames preserved."""
-    return tuple((m.group(1).strip(), m.group(2).upper())
-                 for m in _AUTHOR_PAIR.finditer(segment))
+    """Extract ('Surname', 'I') tuples from an author segment.
+
+    Two comma-list styles exist and are ambiguous to a single regex:
+    surname-first 'Zarfl, C., Schmid, P.' and initial-first 'C. Zarfl,
+    P. Schmid'. On the WRONG style each pattern still half-matches — the
+    surname-first pattern reads initial-first lists as (surname, NEXT author's
+    initial), off by one — so parse with both and keep whichever interpretation
+    explains more of the segment. Ties go to initial-first: in mixed lists
+    ('Yongguo Sun, F. Teng, …') the surname-first reading glues a full name to
+    its neighbour's initial, while the initial-first reading is only ever
+    incomplete, never wrong."""
+    sf = tuple((m.group(1).strip(), m.group(2).upper())
+               for m in _AUTHOR_PAIR.finditer(segment))
+    if_ = tuple((m.group(2).strip(), re.sub(r"[^A-Za-z]", "", m.group(1))[:1].upper())
+                for m in _AUTHOR_PAIR_IF.finditer(segment))
+    return if_ if len(if_) >= len(sf) else sf
 
 
 def _surname_key(name: str) -> str:
@@ -168,6 +194,10 @@ def title_mismatch(cited: str, authoritative: str) -> bool:
     c = _title_core(cited)
     a = _title_core(authoritative)
     if not c or not a or c == a:
+        return False
+    # Records sometimes space out chemical formulas ('Al 2 O 3' vs 'Al2O3');
+    # identical up to whitespace is not a divergence.
+    if c.replace(" ", "") == a.replace(" ", ""):
         return False
     # allow dropping a post-colon subtitle: cited == authoritative main title
     a_main = _title_core(authoritative.split(":", 1)[0])

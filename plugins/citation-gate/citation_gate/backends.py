@@ -139,13 +139,57 @@ def resolve_arxiv_batch(arxiv_ids, session=None) -> dict:
     return out
 
 
+def _datacite_attrs_to_record(norm_doi: str, attrs: dict) -> Optional[CanonicalRecord]:
+    """Map a DataCite /dois attributes object to a CanonicalRecord."""
+    titles = attrs.get("titles") or []
+    title = (titles[0] or {}).get("title") if titles else None
+    if not title:
+        return None
+    authors = []
+    for creator in attrs.get("creators") or []:
+        given, family = creator.get("givenName"), creator.get("familyName")
+        if given and family:
+            authors.append(f"{given} {family}")
+        elif creator.get("name"):
+            name = creator["name"]
+            if "," in name:  # DataCite 'name' is 'Family, Given'
+                fam, _, giv = name.partition(",")
+                name = f"{giv.strip()} {fam.strip()}".strip()
+            authors.append(name)
+    year = attrs.get("publicationYear")
+    container = attrs.get("container") or {}
+    return CanonicalRecord(
+        title=title, authors=tuple(authors),
+        year=year if isinstance(year, int) else None,
+        venue=container.get("title") or attrs.get("publisher"),
+        pages=None, doi=norm_doi, source="datacite",
+    )
+
+
+def _resolve_datacite(norm_doi: str) -> Optional[CanonicalRecord]:
+    """DataCite fallback for DOIs CrossRef does not register (theses,
+    institutional repositories, datasets). Fail open."""
+    url = f"https://api.datacite.org/dois/{urllib.parse.quote(norm_doi, safe='')}"
+    try:
+        payload = http.get_json(url, {}, timeout=TIMEOUT)
+        attrs = (payload.get("data") or {}).get("attributes")
+        if not isinstance(attrs, dict):
+            return None
+        return _datacite_attrs_to_record(norm_doi, attrs)
+    except (http.HttpError, ValueError, KeyError, TypeError) as e:
+        logger.warning("datacite resolve failed for %s: %s", norm_doi, e)
+        return None
+
+
 def resolve_doi(doi: str, session=None) -> Optional[CanonicalRecord]:
     """Resolve a DOI to a CanonicalRecord.
 
     arXiv DOIs (10.48550/arxiv.*) go to Semantic Scholar; everything else goes to
-    CrossRef's /works/<doi> endpoint. Returns None on 404 or any network/parse
-    error (never raises out — fail open). `session` is accepted for call-site
-    compatibility but ignored (the stdlib http client is stateless).
+    CrossRef's /works/<doi> endpoint, then falls back to DataCite (theses and
+    institutional-repository DOIs are registered there, not with CrossRef).
+    Returns None on 404 or any network/parse error (never raises out — fail
+    open). `session` is accepted for call-site compatibility but ignored (the
+    stdlib http client is stateless).
     """
     norm = normalize_doi(doi)
     m = _ARXIV_DOI_RE.match(norm)
@@ -159,12 +203,11 @@ def resolve_doi(doi: str, session=None) -> Optional[CanonicalRecord]:
     try:
         payload = http.get_json(url, {"mailto": MAILTO}, timeout=TIMEOUT)
         msg = payload.get("message")
-        if not isinstance(msg, dict):
-            return None
-        return _crossref_message_to_record(msg)
+        if isinstance(msg, dict):
+            return _crossref_message_to_record(msg)
     except (http.HttpError, ValueError, KeyError, TypeError) as e:
         logger.warning("resolve_doi failed for %s: %s", doi, e)
-        return None
+    return _resolve_datacite(norm)
 
 
 @register_backend

@@ -19,7 +19,10 @@ _WS = re.compile(r"\s+")
 _YEAR = re.compile(r"\b(19[5-9]\d|20[0-3]\d)\b")
 # Capture DOI-shaped tokens for ANY registrant prefix (incl. malformed ones like
 # 20.48550/...) so the gate can flag invalid prefixes rather than silently drop them.
-_DOI = re.compile(r"\b\d{2}\.\d{4,}/[^\s,}\])]+")
+# ')' is allowed IN the token — old Elsevier DOIs contain parentheses
+# (10.1016/0040-6090(85)90244-5); _trim_doi strips only an UNBALANCED trailing
+# ')' so a DOI written inside parentheses still comes out clean.
+_DOI = re.compile(r"\b\d{2}\.\d{4,}/[^\s,}\]]+")
 # An arXiv abs URL identifies the paper as precisely as a DOI; when no explicit
 # DOI is present we derive the canonical arXiv DOI from it so the DOI machinery
 # can resolve + cross-check it (catches a URL that points at the wrong paper).
@@ -49,10 +52,23 @@ def _year_of(s: str) -> Optional[int]:
     return int(m.group(0)) if m else None
 
 
+def _trim_doi(tok: str) -> str:
+    """Strip sentence punctuation and any unbalanced trailing ')' — but keep the
+    ')' of parenthesised DOI segments like '…(85)90244-5'."""
+    while tok:
+        if tok[-1] in ".;":
+            tok = tok[:-1]
+        elif tok[-1] == ")" and tok.count("(") < tok.count(")"):
+            tok = tok[:-1]
+        else:
+            break
+    return tok
+
+
 def _doi_of(s: str) -> Optional[str]:
     m = _DOI.search(s)
     if m:
-        return m.group(0).rstrip(".);")
+        return _trim_doi(m.group(0))
     u = _ARXIV_URL.search(s)
     if u:
         return f"10.48550/arxiv.{u.group(1)}"
