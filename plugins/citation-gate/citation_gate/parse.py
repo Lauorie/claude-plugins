@@ -27,13 +27,19 @@ _DOI = re.compile(r"\b\d{2}\.\d{4,}/[^\s,}\]]+")
 # DOI is present we derive the canonical arXiv DOI from it so the DOI machinery
 # can resolve + cross-check it (catches a URL that points at the wrong paper).
 _ARXIV_URL = re.compile(r"arxiv\.org/abs/(\d{4}\.\d{4,5})", re.IGNORECASE)
-# 编号条目：行首 [40] 或 40. ……直到下一个同形编号行或文末（行首锚定，避免匹配行内 [N]）。
+# 编号条目：行首 [40] 或 40. ……直到下一个同形编号行、**空行**或文末（行首锚定，避免匹配
+# 行内 [N]）。空行截断是关键：真实文献条目只会硬换行、不会跨空行，而教学文档里的编号
+# 步骤（如"5. 回到第 1 步"）后面往往跟着大段散文——不截断的话，散文里偶然出现的年份或
+# arXiv 链接会被吞进条目，制造幽灵引用。
 # group(1)=方括号编号 [N]，group(2)=点编号 N.，group(3)=条目正文。
 _NUMBERED = re.compile(
     r"^[ \t]*(?:\[(\d+)\]|(\d+)\.)[ \t]+(.+?)"
-    r"(?=\n[ \t]*(?:\[\d+\]|\d+\.)[ \t]|\Z)",
+    r"(?=\n[ \t]*(?:\[\d+\]|\d+\.)[ \t]|\n[ \t]*\n|\Z)",
     re.DOTALL | re.MULTILINE,
 )
+# Markdown 围栏代码块。参考文献不会写在 ``` 里，但代码块里的编号行（步骤图、示例输出）
+# 会被 _NUMBERED 误认成文献条目 —— md 解析前整块剥掉。
+_FENCED = re.compile(r"^[ \t]*(```|~~~).*?^[ \t]*\1[^\n]*$", re.DOTALL | re.MULTILINE)
 # Emphasised title span — **bold** or *italic* (markdown). Content has no '*'.
 _BOLD = re.compile(r"\*{1,2}([^*]+?)\*{1,2}", re.DOTALL)
 # 'Authors (YYYY). Title …' author–year–title prose shape (APA-ish). The first
@@ -294,6 +300,8 @@ def _parse_bib(text: str) -> List[Citation]:
 def extract_citations(text: str, filetype: str) -> List[Citation]:
     if filetype == "bib":
         return _parse_bib(text)
+    if filetype == "md":
+        text = _FENCED.sub("", text)
     return _parse_prose(text)
 
 

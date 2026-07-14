@@ -174,3 +174,59 @@ def test_resolve_doi_fails_open_when_both_sources_down(monkeypatch):
 
     monkeypatch.setattr(backends.http, "get_json", fake_get_json)
     assert backends.resolve_doi("10.34726/hss.2019.41084") is None
+
+
+# ---------------------------------------------------------------------------
+# Bug 5: pedagogical numbered lists / fenced diagrams parsed as references
+# (2026-07-14, auditing a teaching blog whose core is a fenced 5-step ASCII
+# diagram: step "5." swallowed all following prose up to EOF, which contained
+# a year and an arXiv link — so the no-year ordered-list guard never fired
+# and the gate HARD_FAILed on a phantom "citation").
+# ---------------------------------------------------------------------------
+
+_BLOG_LIKE = """# 300 行代码跑通一个 Coding Agent
+
+先把图印在脑子里，后面所有代码都在实现它：
+
+```
+  1. 把对话 + 工具发给 LLM
+  2. LLM 回一条 assistant 消息
+  3. 它没要求调工具？ ──是──▶ 结束，返回最终回复
+  4. 逐个执行工具，把结果作为 "tool" 消息追加
+  5. ────────────────────────────────────────────┘（回到第 1 步）
+```
+
+这个范式出自论文《ReAct: Synergizing Reasoning and Acting in Language Models》
+（Yao et al., 2022，[arXiv:2210.03629](https://arxiv.org/abs/2210.03629)）。
+"""
+
+
+def test_fenced_numbered_diagram_is_not_a_reference_list():
+    assert extract_citations(_BLOG_LIKE, "md") == []
+
+
+def test_numbered_entry_body_stops_at_blank_line():
+    # Prose AFTER the reference list must not be swallowed into entry [1] —
+    # here the following paragraph contains an arXiv URL that would otherwise
+    # be mis-attributed to the entry as its DOI.
+    md = (
+        "[1] Shunyu Yao, Jeffrey Zhao. *Some Made-Up Survey Title*. ICLR, 2023.\n"
+        "\n"
+        "正文段落：另一篇论文的链接 https://arxiv.org/abs/2210.03629 与上面的条目无关。\n"
+    )
+    (c,) = extract_citations(md, "md")
+    assert c.title == "Some Made-Up Survey Title"
+    assert c.doi is None
+
+
+def test_wrapped_numbered_entry_without_blank_line_stays_whole():
+    # Characterization guard: a hard-wrapped entry (no blank line) must still
+    # parse as ONE citation with fields drawn from both physical lines.
+    md = (
+        "[7] Ashish Vaswani, Noam Shazeer. *Attention Is All You Need*.\n"
+        "    NeurIPS, 2017. DOI: 10.48550/arXiv.1706.03762\n"
+    )
+    (c,) = extract_citations(md, "md")
+    assert c.title == "Attention Is All You Need"
+    assert c.year == 2017
+    assert c.doi == "10.48550/arXiv.1706.03762"
