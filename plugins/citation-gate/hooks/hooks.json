@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/citation-gate.js\"",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/citation-gate.py\"",
             "timeout": 130
           }
         ]
