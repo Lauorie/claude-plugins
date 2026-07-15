@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -20,6 +22,23 @@ logger = logging.getLogger(__name__)
 
 _FILETYPE = {".bib": "bib", ".tex": "tex", ".md": "md"}
 MAX_CITATIONS_PER_RUN = 30
+# Wall-clock budget: the Stop hook is hard-killed at 300s (hooks.json timeout),
+# which loses the whole report; wind down before that with margin to spare.
+# Override via CITATION_GATE_BUDGET (seconds); <= 0 disables the limit.
+DEFAULT_BUDGET_SECONDS = 270
+
+
+def _resolve_budget(budget_seconds: Optional[float]) -> Optional[float]:
+    """Effective budget in seconds, or None for unlimited."""
+    if budget_seconds is None:
+        raw = os.environ.get("CITATION_GATE_BUDGET", "")
+        try:
+            budget_seconds = float(raw) if raw else DEFAULT_BUDGET_SECONDS
+        except ValueError:
+            logger.warning("invalid CITATION_GATE_BUDGET=%r; using default %ss",
+                           raw, DEFAULT_BUDGET_SECONDS)
+            budget_seconds = DEFAULT_BUDGET_SECONDS
+    return budget_seconds if budget_seconds > 0 else None
 DOI_TITLE_OVERLAP = 0.5
 _ARXIV_DOI_PREFIX = "10.48550"
 # arXiv DOIs are always registrant 10.48550; any other 10.NNNNN/arxiv.* is malformed.
@@ -172,8 +191,24 @@ def _verify_one(citation: Citation, session, cache: Cache) -> CitationResult:
 
 
 def verify_files(paths: List[str], session=None,
-                 cache: Optional[Cache] = None) -> Report:
+                 cache: Optional[Cache] = None,
+                 budget_seconds: Optional[float] = None) -> Report:
+    """Verify citations in `paths`.
+
+    Args:
+        paths: Files to scan for citations.
+        session: Optional HTTP session passed through to backends.
+        cache: Result cache; a fresh default cache when omitted.
+        budget_seconds: Wall-clock budget; None reads CITATION_GATE_BUDGET
+            (default 270s), <= 0 disables the limit. Citations not reached
+            within the budget are reported as SKIP, never verified.
+
+    Returns:
+        Report over all extracted citations (capped at MAX_CITATIONS_PER_RUN).
+    """
     cache = cache or Cache()
+    budget = _resolve_budget(budget_seconds)
+    started = time.monotonic()
 
     # Gather all citations first so we can apply the per-run cap
     all_citations: List[Citation] = []
@@ -200,7 +235,18 @@ def verify_files(paths: List[str], session=None,
 
     results: List[CitationResult] = []
     consecutive_skips = 0
+    budget_exhausted = False
     for citation in all_citations:
+        if not budget_exhausted and budget is not None \
+                and time.monotonic() - started > budget:
+            budget_exhausted = True
+            logger.warning("citation-gate: %ss budget exhausted; skipping rest", budget)
+        if budget_exhausted:
+            results.append(CitationResult(
+                citation, Verdict.SKIP, None, (),
+                f"时间预算耗尽（{budget:g}s），跳过剩余未核验引用",
+            ))
+            continue
         if consecutive_skips >= 2:
             results.append(CitationResult(
                 citation, Verdict.SKIP, None, (),
@@ -216,4 +262,4 @@ def verify_files(paths: List[str], session=None,
     return Report(results)
 
 
-__all__ = ["verify_files", "MAX_CITATIONS_PER_RUN"]
+__all__ = ["verify_files", "MAX_CITATIONS_PER_RUN", "DEFAULT_BUDGET_SECONDS"]
