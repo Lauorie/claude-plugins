@@ -15,13 +15,12 @@ Large models reliably hallucinate citation metadata — they keep a real paper t
 
 ## Requirements
 
-- **`python3` on PATH** (3.8+). No `pip install` needed — the verifier uses only the Python standard library.
-- Node (ships with Claude Code).
+- **`python3` on PATH** (3.8+). No `pip install` needed — both the Stop hook and the verifier use only the Python standard library. (No Node.js required — the hook is a `python3` command.)
 - Network access to the four public scholarly APIs (see [Privacy](#privacy)).
 
 ## How it works
 
-1. On `Stop`, the hook reads the session transcript and collects the `.tex/.bib/.md` files written/edited this turn.
+1. On `Stop`, the hook reads the session transcript and collects the `.tex/.bib/.md` files written/edited this turn — via `Write`/`Edit`/`MultiEdit` **or** a `ChunkWrite` MCP tool (`mcp__*__ChunkWrite`).
 2. Files with no citation markers are skipped (zero cost).
 3. For each citation it runs the bundled `citation_gate` verifier: parse → reverse-lookup (DBLP→SS→CrossRef→OpenAlex, stops at the first source with hits) → compare first-author / year / venue against the authoritative record → grade.
 4. **HARD_FAIL** (high-confidence same-paper match, but metadata differs) → the hook emits a `block` decision with the offending citations and their correct records, so Claude reworks them. **SOFT_WARN** (not found, or low-confidence match) → annotated `[unverified]`, not blocking. **SKIP** (network down) → not blocking.
