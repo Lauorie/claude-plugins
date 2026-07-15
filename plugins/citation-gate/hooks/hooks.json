@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/citation-gate.py\"",
-            "timeout": 130
+            "timeout": 300
           }
         ]
       }
