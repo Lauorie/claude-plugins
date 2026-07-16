@@ -15,16 +15,20 @@ from .parse import extract_citations
 from .report import Report
 from .backends import (
     search_all, normalize_doi, valid_doi, resolve_doi, resolve_arxiv_batch,
+    BackendBreaker,
 )
 from .normalize import title_overlap, venue_conflicts, title_mismatch, extra_authors
 
 logger = logging.getLogger(__name__)
 
 _FILETYPE = {".bib": "bib", ".tex": "tex", ".md": "md"}
-MAX_CITATIONS_PER_RUN = 30
-# Wall-clock budget: the Stop hook is hard-killed at 300s (hooks.json timeout),
-# which loses the whole report; wind down before that with margin to spare.
-# Override via CITATION_GATE_BUDGET (seconds); <= 0 disables the limit.
+# Coverage is bounded ONLY by the wall-clock budget below — never by a citation
+# count. Anything the budget cannot reach is reported as an explicit SKIP so
+# unverified entries are always visible in the report.
+# The Stop hook is hard-killed at 600s (settings.json timeout), which loses the
+# whole report; wind down before that with margin to spare. The default stays
+# at 270s to keep delivery latency reasonable; raise CITATION_GATE_BUDGET (up
+# to ~570s) for large bibliographies. <= 0 disables the limit.
 DEFAULT_BUDGET_SECONDS = 270
 
 
@@ -168,12 +172,13 @@ def _prefetch_arxiv(citations: List[Citation], session, cache: Cache) -> None:
                 cache.put(k, [rec])
 
 
-def _verify_one(citation: Citation, session, cache: Cache) -> CitationResult:
+def _verify_one(citation: Citation, session, cache: Cache,
+                breaker: Optional[BackendBreaker] = None) -> CitationResult:
     cached = cache.get(citation.query)
     if cached is not None:
         records, any_ok = cached, True
     else:
-        records, any_ok = search_all(citation.query, session)
+        records, any_ok = search_all(citation.query, session, breaker=breaker)
         if any_ok:
             cache.put(citation.query, records)
     title_canonical = best_match(citation, records) if records else None
@@ -204,15 +209,14 @@ def verify_files(paths: List[str], session=None,
             within the budget are reported as SKIP, never verified.
 
     Returns:
-        Report over all extracted citations (capped at MAX_CITATIONS_PER_RUN).
+        Report over ALL extracted citations — every citation appears exactly
+        once, either graded or as an explicit SKIP; none is silently dropped.
     """
     cache = cache or Cache()
     budget = _resolve_budget(budget_seconds)
     started = time.monotonic()
 
-    # Gather all citations first so we can apply the per-run cap
     all_citations: List[Citation] = []
-    citation_sources: dict = {}  # citation index → nothing (order preserved)
     for path in paths:
         p = Path(path)
         filetype = _FILETYPE.get(p.suffix.lower(), "md")
@@ -223,15 +227,8 @@ def verify_files(paths: List[str], session=None,
             continue
         all_citations.extend(extract_citations(text, filetype))
 
-    total = len(all_citations)
-    if total > MAX_CITATIONS_PER_RUN:
-        logger.warning(
-            "citation-gate: %d citations exceeded cap %d; verified first %d, skipped %d",
-            total, MAX_CITATIONS_PER_RUN, MAX_CITATIONS_PER_RUN, total - MAX_CITATIONS_PER_RUN,
-        )
-        all_citations = all_citations[:MAX_CITATIONS_PER_RUN]
-
     _prefetch_arxiv(all_citations, session, cache)
+    breaker = BackendBreaker()
 
     results: List[CitationResult] = []
     consecutive_skips = 0
@@ -253,7 +250,7 @@ def verify_files(paths: List[str], session=None,
                 "网络异常连续跳过，已快速跳过剩余引用",
             ))
             continue
-        result = _verify_one(citation, session, cache)
+        result = _verify_one(citation, session, cache, breaker)
         results.append(result)
         if result.verdict is Verdict.SKIP:
             consecutive_skips += 1
@@ -262,4 +259,4 @@ def verify_files(paths: List[str], session=None,
     return Report(results)
 
 
-__all__ = ["verify_files", "MAX_CITATIONS_PER_RUN", "DEFAULT_BUDGET_SECONDS"]
+__all__ = ["verify_files", "DEFAULT_BUDGET_SECONDS"]

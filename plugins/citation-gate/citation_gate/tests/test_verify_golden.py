@@ -23,7 +23,7 @@ def test_golden_fabricated_citation_is_hard_fail(tmp_path, monkeypatch):
     f = tmp_path / "paper.md"
     f.write_text(BAD_DOC, encoding="utf-8")
     # 打桩反查：返回真实论文记录，离线
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([REAL], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([REAL], True))
     report = V.verify_files([str(f)], session=MagicMock(), cache=Cache(cache_dir=tmp_path))
 
     assert report.exit_code() == 1
@@ -37,7 +37,7 @@ def test_golden_fabricated_citation_is_hard_fail(tmp_path, monkeypatch):
 def test_not_found_is_soft_warn_not_blocking(tmp_path, monkeypatch):
     f = tmp_path / "paper.md"
     f.write_text("[1] Some Obscure Author. A truly unknown private memo. 2099.\n", encoding="utf-8")
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], True))
     report = V.verify_files([str(f)], session=MagicMock(), cache=Cache(cache_dir=tmp_path))
     assert report.exit_code() == 0
     assert len(report.soft_warns) == 1
@@ -46,7 +46,7 @@ def test_not_found_is_soft_warn_not_blocking(tmp_path, monkeypatch):
 def test_all_backends_down_is_skip(tmp_path, monkeypatch):
     f = tmp_path / "paper.md"
     f.write_text(BAD_DOC, encoding="utf-8")
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], False))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], False))
     report = V.verify_files([str(f)], session=MagicMock(), cache=Cache(cache_dir=tmp_path))
     assert report.exit_code() == 0
     assert len(report.skipped) == 1
@@ -56,7 +56,7 @@ def test_offline_fast_skip_after_two_downs(tmp_path, monkeypatch):
     f = tmp_path / "p.md"
     f.write_text("[1] A. X. T1. ICML. 2020.\n[2] B. Y. T2. ICML. 2020.\n[3] C. Z. T3. ICML. 2020.\n[4] D. W. T4. ICML. 2020.\n", encoding="utf-8")
     calls = {"n": 0}
-    def fake(q, s):
+    def fake(q, s, **kw):
         calls["n"] += 1
         return ([], False)
     monkeypatch.setattr(V, "search_all", fake)
@@ -68,7 +68,7 @@ def test_offline_fast_skip_after_two_downs(tmp_path, monkeypatch):
 def test_to_dict_shape(tmp_path, monkeypatch):
     f = tmp_path / "paper.md"
     f.write_text(BAD_DOC, encoding="utf-8")
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([REAL], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([REAL], True))
     report = V.verify_files([str(f)], session=MagicMock(), cache=Cache(cache_dir=tmp_path))
     d = report.to_dict()
     assert d["hard_fail"] and d["hard_fail"][0]["index"] == 40

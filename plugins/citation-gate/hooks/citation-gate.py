@@ -127,10 +127,14 @@ def _run_verifier(files: list[str]) -> dict:
 def _decide(report: dict, round_count: int, max_rounds: int) -> tuple[bool, str]:
     hard = report.get("hard_fail") or []
     soft = report.get("soft_warn") or []
+    skip = report.get("skip") or []
     if not hard:
         msg = "引用校验通过。"
         if soft:
             msg += f" {len(soft)} 条未能核实,已标 [unverified],请人工确认。"
+        if skip:
+            msg += (f" 另有 {len(skip)} 条未核验(时间预算/网络限制),"
+                    f"可调大 CITATION_GATE_BUDGET 或手动运行 python3 -m citation_gate 补检。")
         return False, msg
     detail = "\n".join(f"  [{h['index']}] {h['message']}" for h in hard)
     if round_count >= max_rounds:

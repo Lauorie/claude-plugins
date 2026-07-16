@@ -36,7 +36,7 @@ def test_arxiv_url_pointing_to_different_paper_is_hard_fail(tmp_path, monkeypatc
         "observation data",
         ("Chutian Wu", "Xin-lei Zhang"), 2025, "arXiv", None,
         "10.48550/arXiv.2505.05716", "arxiv-ss")
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], True))
     monkeypatch.setattr(V, "resolve_doi", lambda doi, session=None: wrong)
     report = V.verify_files([str(f)], session=MagicMock(),
                             cache=Cache(cache_dir=tmp_path))

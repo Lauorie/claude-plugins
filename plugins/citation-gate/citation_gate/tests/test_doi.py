@@ -41,7 +41,7 @@ def test_invalid_format_doi_is_hard_fail(tmp_path, monkeypatch):
         "DOI: 20.48550/arxiv.2508.11784\n"
     )
     f = _make_doc(tmp_path, body)
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], True))
     monkeypatch.setattr(V, "resolve_doi", lambda doi, session=None: None)
     report = V.verify_files([str(f)], session=None, cache=Cache(cache_dir=tmp_path))
     assert len(report.hard_fails) == 1
@@ -59,7 +59,7 @@ def test_doi_resolves_to_different_paper_is_hard_fail(tmp_path, monkeypatch):
         authors=("Someone Else",), year=2021, venue="IEEE Access",
         pages=None, doi="10.1109/access.2025.3538665", source="crossref-doi",
     )
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], True))
     monkeypatch.setattr(V, "resolve_doi", lambda doi, session=None: other)
     report = V.verify_files([str(f)], session=None, cache=Cache(cache_dir=tmp_path))
     assert len(report.hard_fails) == 1
@@ -77,7 +77,7 @@ def test_doi_resolves_year_differs_is_hard_fail(tmp_path, monkeypatch):
         authors=("Moncef Garouani",), year=2023, venue="arXiv",
         pages=None, doi="10.1234/example.2023.0001", source="crossref-doi",
     )
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], True))
     monkeypatch.setattr(V, "resolve_doi", lambda doi, session=None: rec)
     report = V.verify_files([str(f)], session=None, cache=Cache(cache_dir=tmp_path))
     assert len(report.hard_fails) == 1
@@ -96,7 +96,7 @@ def test_doi_resolves_venue_conflicts_is_hard_fail(tmp_path, monkeypatch):
         venue="IEEE Access", pages=None, doi="10.1109/access.2025.3538665",
         source="crossref-doi",
     )
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], True))
     monkeypatch.setattr(V, "resolve_doi", lambda doi, session=None: rec)
     report = V.verify_files([str(f)], session=None, cache=Cache(cache_dir=tmp_path))
     assert len(report.hard_fails) == 1
@@ -114,7 +114,7 @@ def test_doi_resolves_everything_matches_is_pass(tmp_path, monkeypatch):
         authors=("Mingyang Pan",), year=2025, venue="Electronics",
         pages=None, doi="10.3390/electronics14091744", source="crossref-doi",
     )
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([rec], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([rec], True))
     monkeypatch.setattr(V, "resolve_doi", lambda doi, session=None: rec)
     report = V.verify_files([str(f)], session=None, cache=Cache(cache_dir=tmp_path))
     assert len(report.hard_fails) == 0
@@ -133,7 +133,7 @@ def test_unresolvable_doi_with_different_title_doi_is_hard_fail(tmp_path, monkey
         authors=("Min Pan",), year=2024, venue="Scientific Reports",
         pages=None, doi="10.1038/s41598-024-82871-0", source="crossref",
     )
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([real], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([real], True))
     monkeypatch.setattr(V, "resolve_doi", lambda doi, session=None: None)
     report = V.verify_files([str(f)], session=None, cache=Cache(cache_dir=tmp_path))
     assert len(report.hard_fails) == 1
@@ -152,7 +152,7 @@ def test_arxiv_doi_unresolvable_not_hard_failed_on_doi_grounds(tmp_path, monkeyp
         authors=("Rolf Jagerman",), year=2023, venue="arXiv",
         pages=None, doi="10.48550/arXiv.2305.03653", source="semanticscholar",
     )
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([real], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([real], True))
     monkeypatch.setattr(V, "resolve_doi", lambda doi, session=None: None)
     report = V.verify_files([str(f)], session=None, cache=Cache(cache_dir=tmp_path))
     assert len(report.hard_fails) == 0

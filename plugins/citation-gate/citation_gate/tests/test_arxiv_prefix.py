@@ -10,7 +10,7 @@ def _run(tmp_path, monkeypatch, body):
     f = tmp_path / "p.md"
     f.write_text(body, encoding="utf-8")
     # No network should be needed; make both fail loudly if called.
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], True))
     monkeypatch.setattr(V, "resolve_doi",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("net")))
     return V.verify_files([str(f)], session=MagicMock(),
@@ -40,7 +40,7 @@ def test_correct_arxiv_prefix_not_flagged_by_prefix_rule(tmp_path, monkeypatch):
             "2025. (DOI: 10.48550/arXiv.2512.08296)\n")
     f = tmp_path / "p.md"
     f.write_text(body, encoding="utf-8")
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], True))
     monkeypatch.setattr(V, "resolve_doi", lambda doi, session=None: None)
     report = V.verify_files([str(f)], session=MagicMock(),
                             cache=Cache(cache_dir=tmp_path))

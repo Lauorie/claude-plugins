@@ -36,7 +36,7 @@ def test_clean_italic_title_under_doi_does_not_false_fail(tmp_path, monkeypatch)
         "via Self-Improvement",
         ("J. Rosser", "Jakob N. Foerster"), 2025, "arXiv", None,
         "10.48550/arXiv.2502.00757", "arxiv-ss")
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], True))
     monkeypatch.setattr(V, "resolve_doi", lambda doi, session=None: real)
     report = V.verify_files([str(f)], session=MagicMock(),
                             cache=Cache(cache_dir=tmp_path))
@@ -55,7 +55,7 @@ def test_altered_italic_title_under_doi_is_hard_fail(tmp_path, monkeypatch):
         "Production",
         ("Nvjk Kartik",), 2025, "arXiv", None,
         "10.48550/arXiv.2509.14647", "arxiv-ss")
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], True))
     monkeypatch.setattr(V, "resolve_doi", lambda doi, session=None: real)
     report = V.verify_files([str(f)], session=MagicMock(),
                             cache=Cache(cache_dir=tmp_path))

@@ -41,7 +41,7 @@ def test_dblp_single_author_dict_normalized(monkeypatch):
 def test_search_all_stops_at_first_hit(monkeypatch):
     calls = {"n": 0}
 
-    def fake(url, params, timeout=6):
+    def fake(url, params, timeout=6, headers=None):
         calls["n"] += 1
         return DBLP_PAYLOAD
 
@@ -54,7 +54,7 @@ def test_search_all_stops_at_first_hit(monkeypatch):
 def test_search_all_skip_flag_when_all_down(monkeypatch):
     calls = {"n": 0}
 
-    def fake(url, params, timeout=6):
+    def fake(url, params, timeout=6, headers=None):
         calls["n"] += 1
         raise http.HttpError("down")
 

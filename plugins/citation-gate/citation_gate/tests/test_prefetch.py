@@ -9,7 +9,7 @@ from citation_gate import backends as B
 
 
 def test_resolve_arxiv_batch_maps_response(monkeypatch):
-    def fake_post(url, params, body, timeout=6):
+    def fake_post(url, params, body, timeout=6, headers=None):
         return [
             {"title": "TapeAgents: a Holistic Framework",
              "authors": [{"name": "Dzmitry Bahdanau"}], "year": 2024,
@@ -34,7 +34,7 @@ def test_prefetch_seeds_cache_and_catches_author_lie(tmp_path, monkeypatch):
         None, "10.48550/arXiv.2412.08445", "arxiv-ss")
     monkeypatch.setattr(V, "resolve_arxiv_batch",
                         lambda ids, session=None: {"2412.08445": real})
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], True))
     monkeypatch.setattr(V, "resolve_doi",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("cache")))
     report = V.verify_files([str(f)], session=MagicMock(),

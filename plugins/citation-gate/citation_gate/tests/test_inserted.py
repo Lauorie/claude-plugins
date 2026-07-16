@@ -49,7 +49,7 @@ def test_identical_title_not_mismatch():
 def _doc(tmp_path, monkeypatch, body, real):
     f = tmp_path / "p.md"
     f.write_text(body, encoding="utf-8")
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], True))
     monkeypatch.setattr(V, "resolve_doi", lambda doi, session=None: real)
     return V.verify_files([str(f)], session=MagicMock(),
                           cache=Cache(cache_dir=tmp_path))

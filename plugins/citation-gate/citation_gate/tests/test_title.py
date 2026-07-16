@@ -65,7 +65,7 @@ def test_altered_title_under_correct_doi_is_hard_fail(tmp_path, monkeypatch):
         "for Dense Retrieval",
         ("Min Pan", "Wenrui Xiong"), 2025, "Electronics", None,
         "10.3390/electronics14091744", "crossref-doi")
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], True))
     monkeypatch.setattr(V, "resolve_doi", lambda doi, session=None: real)
     report = V.verify_files([str(f)], session=MagicMock(),
                             cache=Cache(cache_dir=tmp_path))
@@ -84,7 +84,7 @@ def test_correct_title_under_correct_doi_passes(tmp_path, monkeypatch):
         "for Dense Retrieval",
         ("Min Pan", "Wenrui Xiong"), 2025, "Electronics", None,
         "10.3390/electronics14091744", "crossref-doi")
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], True))
     monkeypatch.setattr(V, "resolve_doi", lambda doi, session=None: real)
     report = V.verify_files([str(f)], session=MagicMock(),
                             cache=Cache(cache_dir=tmp_path))

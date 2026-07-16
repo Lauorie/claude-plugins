@@ -6,7 +6,7 @@ import os
 import re
 import time
 import urllib.parse
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from . import http
 from .models import CanonicalRecord
@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 MAILTO = os.environ.get("CITATION_GATE_MAILTO", "citation-gate@users.noreply.github.com")
 TIMEOUT = 6
 POLITE_DELAY = 0.5
+# Consecutive HTTP 429s from one backend before it is disabled for the run.
+RATE_LIMIT_TRIP = 3
 _REGISTRY_TMP = []
 
 _DOI_RE = re.compile(r"^10\.\d{4,}/\S+$")
@@ -25,7 +27,48 @@ ARXIV_RESOLVE_RETRIES = 2
 
 
 class BackendError(Exception):
-    """Raised when a backend cannot complete an HTTP lookup."""
+    """Raised when a backend cannot complete an HTTP lookup.
+
+    Attributes:
+        status: HTTP status code when the failure was an HTTP error response
+            (e.g. 429), else None.
+    """
+
+    def __init__(self, message: str, status: Optional[int] = None):
+        super().__init__(message)
+        self.status = status
+
+
+class BackendBreaker:
+    """Per-run circuit breaker for rate-limited backends.
+
+    A backend that answers HTTP 429 `threshold` times in a row (Semantic
+    Scholar's anonymous pool does this for minutes at a time) is disabled for
+    the rest of the run instead of being re-queried — and re-429ing — once per
+    citation. Any successful response resets that backend's count.
+    """
+
+    def __init__(self, threshold: int = RATE_LIMIT_TRIP):
+        self.threshold = threshold
+        self._consecutive_429s: Dict[str, int] = {}
+
+    def record_rate_limited(self, name: str) -> None:
+        self._consecutive_429s[name] = self._consecutive_429s.get(name, 0) + 1
+
+    def record_ok(self, name: str) -> None:
+        self._consecutive_429s[name] = 0
+
+    def tripped(self, name: str) -> bool:
+        return self._consecutive_429s.get(name, 0) >= self.threshold
+
+
+def _s2_headers() -> Optional[Dict[str, str]]:
+    """Semantic Scholar auth header from CITATION_GATE_S2_API_KEY (if set).
+
+    A key moves requests off the shared anonymous pool, which 429s under load.
+    """
+    key = os.environ.get("CITATION_GATE_S2_API_KEY", "").strip()
+    return {"x-api-key": key} if key else None
 
 
 def register_backend(cls: type) -> type:
@@ -84,7 +127,7 @@ def _resolve_arxiv(arxiv_id: str, session=None) -> Optional[CanonicalRecord]:
     for attempt in range(ARXIV_RESOLVE_RETRIES):
         try:
             p = http.get_json(url, {"fields": "title,authors,year,venue,externalIds"},
-                              timeout=TIMEOUT)
+                              timeout=TIMEOUT, headers=_s2_headers())
             authors = tuple(a.get("name", "") for a in (p.get("authors") or []))
             ext = p.get("externalIds") or {}
             title = (p.get("title") or "").rstrip(".")
@@ -116,7 +159,8 @@ def resolve_arxiv_batch(arxiv_ids, session=None) -> dict:
             data = http.post_json(
                 "https://api.semanticscholar.org/graph/v1/paper/batch",
                 {"fields": "title,authors,year,venue,externalIds"},
-                {"ids": [f"ARXIV:{i}" for i in ids]}, timeout=TIMEOUT * 3) or []
+                {"ids": [f"ARXIV:{i}" for i in ids]}, timeout=TIMEOUT * 3,
+                headers=_s2_headers()) or []
             for i, p in zip(ids, data):
                 if not p:
                     continue
@@ -221,7 +265,7 @@ class DblpBackend:
                                     timeout=TIMEOUT)
             hits = payload.get("result", {}).get("hits", {}).get("hit", [])
         except http.HttpError as e:
-            raise BackendError(str(e)) from e
+            raise BackendError(str(e), status=e.status) from e
         out = []
         for h in hits:
             info = h.get("info", {})
@@ -246,10 +290,10 @@ class SemanticScholarBackend:
             payload = http.get_json(self.url, {
                 "query": query, "limit": 5,
                 "fields": "title,authors,year,venue,externalIds",
-            }, timeout=TIMEOUT)
+            }, timeout=TIMEOUT, headers=_s2_headers())
             data = payload.get("data", []) or []
         except http.HttpError as e:
-            raise BackendError(str(e)) from e
+            raise BackendError(str(e), status=e.status) from e
         out = []
         for p in data:
             authors = tuple(a.get("name", "") for a in (p.get("authors") or []))
@@ -274,7 +318,7 @@ class CrossrefBackend:
             }, timeout=TIMEOUT)
             items = payload.get("message", {}).get("items", []) or []
         except http.HttpError as e:
-            raise BackendError(str(e)) from e
+            raise BackendError(str(e), status=e.status) from e
         out = []
         for it in items:
             authors = tuple(
@@ -304,7 +348,7 @@ class OpenAlexBackend:
                                                "mailto": MAILTO}, timeout=TIMEOUT)
             results = payload.get("results", []) or []
         except http.HttpError as e:
-            raise BackendError(str(e)) from e
+            raise BackendError(str(e), status=e.status) from e
         out = []
         for w in results:
             authors = tuple(
@@ -327,32 +371,51 @@ BACKEND_REGISTRY = [cls() for cls in _REGISTRY_TMP]
 
 
 def search_all(query: str, session=None,
-               polite_delay: float = POLITE_DELAY) -> Tuple[List[CanonicalRecord], bool]:
+               polite_delay: float = POLITE_DELAY,
+               breaker: Optional[BackendBreaker] = None,
+               ) -> Tuple[List[CanonicalRecord], bool]:
     """Query backends in priority order until one returns hits.
 
     Args:
         query: Search string to pass to each backend.
         session: Ignored (kept for call-site compatibility).
         polite_delay: Seconds to sleep between backends that returned no hits.
+        breaker: Optional per-run circuit breaker; backends it has tripped
+            (persistent HTTP 429) are skipped without an HTTP attempt.
 
     Returns:
         Tuple of (records, any_backend_ok) where any_backend_ok is True if at
         least one backend responded with HTTP 200 (even with 0 hits).
     """
     any_ok = False
-    for i, backend in enumerate(BACKEND_REGISTRY):
+    queried = False
+    for backend in BACKEND_REGISTRY:
+        if breaker is not None and breaker.tripped(backend.name):
+            continue
+        if queried:
+            time.sleep(polite_delay)
+        queried = True
         try:
             recs = backend.search(query)
             any_ok = True
+            if breaker is not None:
+                breaker.record_ok(backend.name)
             if recs:
                 return recs, True
         except BackendError as e:
+            if breaker is not None and e.status == 429:
+                breaker.record_rate_limited(backend.name)
+                if breaker.tripped(backend.name):
+                    logger.warning(
+                        "backend %s rate-limited (HTTP 429) %d times in a row; "
+                        "disabled for the rest of this run",
+                        backend.name, breaker.threshold)
+                    continue
             logger.warning("backend %s failed: %s", backend.name, e)
-        if i < len(BACKEND_REGISTRY) - 1:
-            time.sleep(polite_delay)
     return [], any_ok
 
 
 __all__ = ["BACKEND_REGISTRY", "register_backend", "search_all", "BackendError",
+           "BackendBreaker", "RATE_LIMIT_TRIP",
            "DblpBackend", "SemanticScholarBackend", "CrossrefBackend", "OpenAlexBackend",
            "normalize_doi", "valid_doi", "resolve_doi"]

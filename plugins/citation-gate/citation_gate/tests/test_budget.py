@@ -1,5 +1,5 @@
 """Time budget: verify_files must wind down gracefully before the Stop hook
-is hard-killed by the harness (hooks.json timeout 300s), instead of losing
+is hard-killed by the harness (settings.json timeout 600s), instead of losing
 the whole report to SIGKILL."""
 import itertools
 from unittest.mock import MagicMock
@@ -24,7 +24,7 @@ def _install_fake_clock(monkeypatch, step: float = 100.0) -> None:
 def test_budget_exhausted_skips_remaining(tmp_path, monkeypatch):
     f = tmp_path / "p.md"
     f.write_text(DOC, encoding="utf-8")
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], True))
     # Clock: start=0, then 100/200/300 at each per-citation check.
     _install_fake_clock(monkeypatch)
     report = V.verify_files([str(f)], session=MagicMock(),
@@ -42,7 +42,7 @@ def test_budget_exhausted_skips_remaining(tmp_path, monkeypatch):
 def test_budget_from_env_var(tmp_path, monkeypatch):
     f = tmp_path / "p.md"
     f.write_text(DOC, encoding="utf-8")
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], True))
     monkeypatch.setenv("CITATION_GATE_BUDGET", "250")
     _install_fake_clock(monkeypatch)
     report = V.verify_files([str(f)], session=MagicMock(),
@@ -53,7 +53,7 @@ def test_budget_from_env_var(tmp_path, monkeypatch):
 def test_budget_zero_disables_limit(tmp_path, monkeypatch):
     f = tmp_path / "p.md"
     f.write_text(DOC, encoding="utf-8")
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], True))
     _install_fake_clock(monkeypatch, step=1e6)
     report = V.verify_files([str(f)], session=MagicMock(),
                             cache=Cache(cache_dir=tmp_path), budget_seconds=0)
@@ -62,5 +62,6 @@ def test_budget_zero_disables_limit(tmp_path, monkeypatch):
 
 
 def test_default_budget_fits_hook_timeout():
-    # hooks.json Stop timeout is 300s; the in-process default must leave margin.
+    # settings.json Stop timeout is 600s; the default stays well below it both
+    # for margin and to keep default delivery latency reasonable.
     assert 0 < V.DEFAULT_BUDGET_SECONDS < 300

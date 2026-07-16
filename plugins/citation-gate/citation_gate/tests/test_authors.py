@@ -121,7 +121,7 @@ def test_coauthor_lie_via_doi_is_hard_fail(tmp_path, monkeypatch):
     real = CanonicalRecord(
         "DMQR-RAG: Diverse Multi-Query Rewriting for RAG", REAL_DMQR, 2024,
         "arXiv", None, "10.48550/arXiv.2411.13154", "arxiv-ss")
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], True))
     monkeypatch.setattr(V, "resolve_doi", lambda doi, session=None: real)
     report = V.verify_files([str(f)], session=MagicMock(),
                             cache=Cache(cache_dir=tmp_path))
@@ -138,7 +138,7 @@ def test_clean_coauthors_via_doi_pass(tmp_path, monkeypatch):
     real = CanonicalRecord(
         "DMQR-RAG: Diverse Multi-Query Rewriting for RAG", REAL_DMQR, 2024,
         "arXiv", None, "10.48550/arXiv.2411.13154", "arxiv-ss")
-    monkeypatch.setattr(V, "search_all", lambda q, s: ([], True))
+    monkeypatch.setattr(V, "search_all", lambda q, s, **kw: ([], True))
     monkeypatch.setattr(V, "resolve_doi", lambda doi, session=None: real)
     report = V.verify_files([str(f)], session=MagicMock(),
                             cache=Cache(cache_dir=tmp_path))
